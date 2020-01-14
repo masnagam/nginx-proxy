@@ -1,0 +1,84 @@
+name: Docker
+
+on:
+  - push
+
+env:
+  IMAGE: 'masnagam/nginx-proxy'
+  DOCKERHUB_USER: 'masnagam'
+
+jobs:
+  build-images:
+    strategy:
+      matrix:
+        # Unfortunately, there is no official nginx image for arm32v5
+        arch:
+          - amd64
+          - arm32v7
+          - arm64v8
+        include:
+          - arch: amd64
+            forego-url: 'https://bin.equinox.io/a/69MotMTHnJ5/forego-20180217041714-linux-amd64.tar.gz'
+            forego-sha256: 'b104fa2f2bf9ea507b2bc3a3673084a67380b7a2d57dbdd457b9b5896e963d56'
+            docker-gen: 'docker-gen-linux-amd64'
+            platform: linux/amd64
+          - arch: arm32v7
+            forego-url: 'https://bin.equinox.io/a/mUfRnN7DMFy/forego-20180217041714-linux-arm.tar.gz'
+            forego-sha256: 'ec276eb884e4f25f2ee611df4d942cc0bebbfea2af8f488e1e0d13c67b45b796'
+            docker-gen: 'docker-gen-linux-armhf'
+            platform: linux/arm/v7
+          - arch: arm64v8
+            forego-url: 'https://bin.equinox.io/a/bmDzrQCo9Ht/forego-20180217041714-linux-arm64.tar.gz'
+            forego-sha256: '975c45a525eb81ace9dfb8110f4f1c2be786a6d5dc2ae82684c0c5ebb9911332'
+            docker-gen: 'docker-gen-linux-armhf'
+            platform: linux/arm64/v8
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Setup QEMU user-mode emulation
+        run: |-
+          sudo apt-get update
+          sudo apt-get install -y qemu qemu-user-static
+          docker run --rm --privileged multiarch/qemu-user-static --reset
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: crazy-max/ghaction-docker-buildx@v1
+        with:
+          version: latest
+      - name: Download forego
+        run: |-
+          curl -fsSL ${{ matrix.forego-url }} >forego.tar.gz
+          echo "${{ matrix.forego-sha256 }}  forego.tar.gz" | shasum -a 256 -c
+          tar -xzvf forego.tar.gz
+      - name: Rewrite Dockerfile
+        run: >-
+          sed -i
+          -e 's|ADD https://github.com/jwilder/forego/releases/download/v0.16.1/forego|COPY forego|'
+          -e "s|docker-gen-linux-amd64|${{ matrix.docker-gen }}|"
+          Dockerfile
+      - name: Login to DockerHub
+        run: |-
+          docker login -u $DOCKERHUB_USER -p ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push image
+        run: >-
+          docker buildx build --no-cache
+          -f Dockerfile
+          -t $IMAGE:${{ matrix.arch }}
+          --platform "${{ matrix.platform }}"
+          --push
+          .
+  build-multi-arch-image:
+    runs-on: ubuntu-latest
+    needs: build-images
+    steps:
+      - name: Login to DockerHub
+        run: |-
+          docker login -u $DOCKERHUB_USER -p ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create and push the manifest for the multi-arch image
+        env:
+          DOCKER_CLI_EXPERIMENTAL: enabled
+        run: |-
+          docker manifest create $IMAGE $IMAGE:amd64 $IMAGE:arm32v7 $IMAGE:arm64v8
+          docker manifest annotate $IMAGE $IMAGE:arm32v7 --os linux --arch arm --variant v7
+          docker manifest annotate $IMAGE $IMAGE:arm64v8 --os linux --arch arm64 --variant v8
+          docker manifest push $IMAGE
