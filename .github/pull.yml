@@ -1,7 +1,7 @@
 version: "1"
 rules:
-  - base: master
-    upstream: jwilder:master
+  - base: main
+    upstream: jwilder:main
     # `rebase` doesn't work as expected.
     # See https://github.com/wei/pull/issues/107
     mergeMethod: merge
